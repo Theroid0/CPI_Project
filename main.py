@@ -1,5 +1,6 @@
 import cv2
 import time
+import math
 import threading
 import numpy as np
 from collections import deque
@@ -7,9 +8,18 @@ from scipy.spatial import distance as dist
 import mediapipe as mp
 import winsound   
 import XInput
+from config import *
 
 alarm_playing = False
 controller_vibrating = False
+is_yawning = False
+yawn_counter = 0
+sound_playing = False
+consecutive_frames_threshold = CONSECUTIVE_FRAMES_THRESHOLD
+
+def euclidean_distance(pt1, pt2):
+    """Calculate euclidean distance between two points"""
+    return math.sqrt((pt1.x - pt2.x) ** 2 + (pt1.y - pt2.y) ** 2)
 
 def play_alarm(sound_file="warning.wav"):
     global alarm_playing
@@ -54,7 +64,7 @@ EAR_CONSEC_FRAMES = 20
 window_size = 10
 
 def main():
-    global alarm_playing
+    global alarm_playing,is_yawning,yawn_counter
     cap = cv2.VideoCapture(0)
 
     counter = 0
@@ -78,6 +88,7 @@ def main():
 
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             results = face_mesh.process(rgb_frame)
+            current_yawn_detected = False
 
             if results.multi_face_landmarks:
                 for face_landmarks in results.multi_face_landmarks:
@@ -87,6 +98,25 @@ def main():
                                  int(face_landmarks.landmark[i].y * h)) for i in LEFT_EYE]
                     right_eye = [(int(face_landmarks.landmark[i].x * w),
                                   int(face_landmarks.landmark[i].y * h)) for i in RIGHT_EYE]
+                    upper_lip = face_landmarks.landmark[13]  # upper inner lip
+                    lower_lip = face_landmarks.landmark[14]  # lower inner lip
+
+                    mouth_open = euclidean_distance(upper_lip, lower_lip)
+                    if mouth_open > YAWN_THRESHOLD:
+                        current_yawn_detected = True
+                        yawn_counter += 1
+                        if not is_yawning and yawn_counter >= consecutive_frames_threshold:
+                            is_yawning = True
+                            print("Yawn started - Alert triggered!")
+                    else:
+                        # Reset yawn counter if mouth is not open
+                        yawn_counter = 0
+                        
+                    if not current_yawn_detected:
+                        if is_yawning:
+                            print("Yawn ended")
+                        is_yawning = False
+                        yawn_counter = 0
 
                     leftEAR = eye_aspect_ratio(left_eye)
                     rightEAR = eye_aspect_ratio(right_eye)
@@ -112,7 +142,10 @@ def main():
                         counter = 0
                         distracted = False
                         
-                    if distracted or not holdingSteering:
+                    if is_yawning or distracted or not holdingSteering:
+                        if is_yawning:
+                            cv2.putText(frame, "YAWN DETECTED!", (10, 150), cv2.FONT_HERSHEY_SIMPLEX,
+                                    1, (0, 0, 255), 2, cv2.LINE_AA)
                         if distracted:
                             cv2.putText(frame, "!!! DROWSINESS ALERT !!!", (10,120),
                                         cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,0,255), 3)
